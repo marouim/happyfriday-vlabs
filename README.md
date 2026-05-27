@@ -12,6 +12,64 @@ Chaque dossier contient ses propres templates `openshift/template.yaml` et
 `BuildConfig`, deux `ImageStream`, deux `Deployment` et deux conteneurs
 distincts.
 
+## Base de donnees PostgreSQL
+
+Le backend utilise une base PostgreSQL accessible par le service `postgresql`
+et les identifiants contenus dans le secret `postgresql-credentials`. La base
+doit etre deployee et initialisee avant de deployer le backend.
+
+Depuis la racine du projet, se connecter au projet OpenShift cible :
+
+```bash
+oc login https://api.example.openshift.com:6443
+oc project my-project
+```
+
+Avant la premiere installation, remplacer la valeur `change-me` dans
+`database/manifests/postgresql-secret.yaml` par un mot de passe adapte a
+l'environnement cible. Appliquer ensuite les ressources PostgreSQL :
+
+```bash
+oc apply -f database/manifests/postgresql-secret.yaml
+oc apply -f database/manifests/postgresql-pvc.yaml
+oc apply -f database/manifests/postgresql-service.yaml
+oc apply -f database/manifests/postgresql-deployment.yaml
+
+oc rollout status deployment/postgresql
+```
+
+Le `PersistentVolumeClaim` `postgresql-data` conserve les donnees lors des
+redemarrages du pod.
+
+## Initialisation du schema et des donnees de base
+
+Une fois PostgreSQL pret, executer `database/schema.sql` dans le pod :
+
+```bash
+oc exec -i deployment/postgresql -- \
+  psql -v ON_ERROR_STOP=1 -U virtual_labs -d virtual_labs -f - \
+  < database/schema.sql
+```
+
+Le script cree les tables `vlab_types` et `vlabs`, puis insere les types et
+les laboratoires fournis comme donnees initiales. Il peut etre rejoue sans
+dupliquer ces donnees.
+
+Verifier le contenu initialise :
+
+```bash
+oc exec deployment/postgresql -- \
+  psql -U virtual_labs -d virtual_labs \
+  -c 'SELECT id, name FROM vlab_types ORDER BY id;'
+
+oc exec deployment/postgresql -- \
+  psql -U virtual_labs -d virtual_labs \
+  -c 'SELECT id, name, status FROM vlabs ORDER BY id;'
+```
+
+Si les valeurs `POSTGRES_USER` ou `POSTGRES_DB` du secret sont modifiees,
+adapter les options `-U` et `-d` dans ces commandes.
+
 ## Build binaire local
 
 Depuis la racine du projet :
