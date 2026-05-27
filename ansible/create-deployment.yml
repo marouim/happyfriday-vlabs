@@ -1,0 +1,56 @@
+---
+- name: Create a Kubernetes deployment
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    deployment_name: sample-web
+    deployment_image: registry.redhat.io/ubi9/httpd-24:latest
+    deployment_replicas: 1
+    deployment_container_port: 8080
+
+  tasks:
+    - name: Require a target namespace
+      ansible.builtin.assert:
+        that:
+          - deployment_namespace is defined
+          - deployment_namespace | length > 0
+        fail_msg: "Provide the namespace with -e deployment_namespace=<namespace>."
+
+    - name: Create Kubernetes namespace
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ deployment_namespace }}"
+
+    - name: Apply Kubernetes deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "{{ deployment_name }}"
+            namespace: "{{ deployment_namespace }}"
+            labels:
+              app: "{{ deployment_name }}"
+          spec:
+            replicas: "{{ deployment_replicas }}"
+            selector:
+              matchLabels:
+                app: "{{ deployment_name }}"
+            template:
+              metadata:
+                labels:
+                  app: "{{ deployment_name }}"
+              spec:
+                containers:
+                  - name: "{{ deployment_name }}"
+                    image: "{{ deployment_image }}"
+                    ports:
+                      - name: http
+                        containerPort: "{{ deployment_container_port }}"
+                        protocol: TCP
