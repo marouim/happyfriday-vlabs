@@ -32,6 +32,7 @@ const activeLabs = computed(() =>
 )
 
 const statusColors = {
+  deleting: 'info',
   failed: 'error',
   running: 'success',
   starting: 'info',
@@ -41,6 +42,7 @@ const statusColors = {
 }
 
 const statusLabels = {
+  deleting: 'Deleting',
   failed: 'Failed',
   running: 'Running',
   starting: 'Starting',
@@ -93,7 +95,7 @@ function isActionPending(laboratory) {
 }
 
 function isProgressStatus(status) {
-  return status === 'starting' || status === 'stopping'
+  return status === 'deleting' || status === 'starting' || status === 'stopping'
 }
 
 function stopProgressPolling() {
@@ -231,8 +233,9 @@ async function deleteLaboratory() {
   pendingDeletions.value[laboratory.id] = true
 
   try {
-    await requestApi(`/api/vlabs/${laboratory.id}`, { method: 'DELETE' })
-    laboratories.value = laboratories.value.filter((entry) => entry.id !== laboratory.id)
+    const updatedLaboratory = await requestApi(`/api/vlabs/${laboratory.id}`, { method: 'DELETE' })
+    Object.assign(laboratory, updatedLaboratory)
+    syncProgressPolling()
     deletionDialogOpen.value = false
     laboratoryToDelete.value = null
   } catch (error) {

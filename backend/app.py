@@ -13,7 +13,7 @@ ACTION_JOB_TEMPLATE_FIELDS = {
     "stopped": ("stop", "aap_stop_job_template_id", "stopping"),
 }
 FAILED_AAP_STATUSES = {"canceled", "error", "failed"}
-PENDING_VLAB_STATUSES = {"starting", "stopping"}
+PENDING_VLAB_STATUSES = {"deleting", "starting", "stopping"}
 
 
 def create_app(test_config=None):
@@ -135,6 +135,14 @@ def create_app(test_config=None):
 
             job_status = get_aap_job_status(vlab["aap_job_id"])
             if job_status == "successful":
+                if vlab["status"] == "deleting":
+                    connection.execute(
+                        "DELETE FROM vlabs WHERE id = %s",
+                        (vlab["id"],),
+                    )
+                    vlab["_deleted"] = True
+                    continue
+
                 updated_vlab = connection.execute(
                     """
                     UPDATE vlabs
@@ -170,6 +178,8 @@ def create_app(test_config=None):
                     (job_status, vlab["id"]),
                 ).fetchone()
                 vlab.update(updated_vlab)
+
+        vlabs[:] = [vlab for vlab in vlabs if not vlab.get("_deleted")]
 
     @app.get("/api/vlabs")
     def list_vlabs():
@@ -308,18 +318,59 @@ def create_app(test_config=None):
         with connect_database() as connection:
             vlab = connection.execute(
                 """
-                DELETE FROM vlabs
-                WHERE id = %s
-                RETURNING id, name,
-                    (SELECT name FROM vlab_types WHERE id = type_id) AS type,
-                    status
+                SELECT vlabs.id, vlabs.name, vlab_types.name AS type,
+                    vlab_types.aap_delete_job_template_id,
+                    vlabs.status
+                FROM vlabs
+                JOIN vlab_types ON vlab_types.id = vlabs.type_id
+                WHERE vlabs.id = %s
                 """,
                 (vlab_id,),
             ).fetchone()
         if vlab is None:
             return jsonify({"error": "Laboratory not found."}), 404
 
-        return jsonify(vlab)
+        job_id, launch_error = launch_aap_job_template(
+            vlab,
+            "delete",
+            vlab["aap_delete_job_template_id"],
+        )
+        if launch_error:
+            with connect_database() as connection:
+                failed_vlab = connection.execute(
+                    """
+                    UPDATE vlabs
+                    SET status = 'failed',
+                        aap_target_status = NULL,
+                        aap_last_job_status = 'launch_failed'
+                    WHERE id = %s
+                    RETURNING id, name,
+                        (SELECT name FROM vlab_types WHERE id = type_id) AS type,
+                        status
+                    """,
+                    (vlab_id,),
+                ).fetchone()
+            if failed_vlab is not None:
+                vlab = failed_vlab
+            return jsonify({"error": launch_error, "vlab": serialize_vlab(vlab)}), 502
+
+        with connect_database() as connection:
+            vlab = connection.execute(
+                """
+                UPDATE vlabs
+                SET status = 'deleting',
+                    aap_job_id = %s,
+                    aap_target_status = 'deleted',
+                    aap_last_job_status = 'launched'
+                WHERE id = %s
+                RETURNING id, name,
+                    (SELECT name FROM vlab_types WHERE id = type_id) AS type,
+                    status
+                """,
+                (job_id, vlab_id),
+            ).fetchone()
+
+        return jsonify(serialize_vlab(vlab))
 
     return app
 

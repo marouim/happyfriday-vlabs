@@ -51,6 +51,11 @@ AAP retourne `successful`, le statut devient la cible demandee (`running` ou
 `stopped`). Si AAP retourne `failed`, `error` ou `canceled`, le statut devient
 `failed`.
 
+Quand `DELETE /api/vlabs/<id>` est appele, le backend lance le job template
+Delete configure sur le type du laboratoire, place le lab en `deleting`, puis
+surveille ce job lors des lectures `GET /api/vlabs`. Quand AAP retourne
+`successful`, le lab est supprime de PostgreSQL.
+
 Selon la documentation AAP 2.6, creer ce token avec :
 
 ```bash
@@ -60,6 +65,8 @@ curl -u user:password -k -X POST \
 
 Les types `Airbus A320` et `Boing 737` sont initialises dans
 `database/schema.sql` avec les job templates Start/Stop `8/9` et `10/11`.
+Le script ajoute aussi `aap_delete_job_template_id`; renseigner cette colonne
+avec le job template AAP `delete_job` de chaque type.
 
 Exemples :
 

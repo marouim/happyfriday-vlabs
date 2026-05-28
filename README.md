@@ -54,8 +54,8 @@ oc exec -i deployment/postgresql -- \
 Le script cree les tables `vlab_types` et `vlabs`, puis insere les types et
 les laboratoires fournis comme donnees initiales. Il peut etre rejoue sans
 dupliquer ces donnees. Les types de laboratoire portent aussi les numeros des
-job templates AAP Start et Stop; `Airbus A320` est initialise avec Start `8`
-et Stop `9`, et `Boing 737` avec Start `10` et Stop `11`.
+job templates AAP Start, Stop et Delete; `Airbus A320` est initialise avec
+Start `8` et Stop `9`, et `Boing 737` avec Start `10` et Stop `11`.
 
 Verifier le contenu initialise :
 
@@ -73,7 +73,8 @@ Si les valeurs `POSTGRES_USER` ou `POSTGRES_DB` du secret sont modifiees,
 adapter les options `-U` et `-d` dans ces commandes.
 
 Le backend utilise aussi `starting` pendant le demarrage d'un job AAP,
-`stopping` pendant l'arret, et `failed` quand le job AAP echoue.
+`stopping` pendant l'arret, `deleting` pendant la suppression, et `failed`
+quand le job AAP echoue.
 
 ## Build binaire local
 

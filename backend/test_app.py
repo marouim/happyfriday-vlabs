@@ -310,15 +310,106 @@ class VlabApiTestCase(unittest.TestCase):
         self.assertEqual(response.get_json()[0]["status"], "failed")
         get.assert_called_once()
 
-    def test_delete_vlab(self):
-        self.database.execute.return_value = self.cursor(
-            row={"id": 2, "name": "Cabin systems training", "type": "Boing 737", "status": "stopped"}
-        )
+    @patch("app.requests.post")
+    def test_delete_vlab_launches_delete_aap_job_template(self, post):
+        post.return_value.ok = True
+        post.return_value.json.return_value = {"job": 44}
+        self.database.execute.side_effect = [
+            self.cursor(
+                row={
+                    "id": 2,
+                    "name": "Cabin systems training",
+                    "type": "Boing 737",
+                    "aap_delete_job_template_id": 12,
+                    "status": "stopped",
+                }
+            ),
+            self.cursor(
+                row={
+                    "id": 2,
+                    "name": "Cabin systems training",
+                    "type": "Boing 737",
+                    "status": "deleting",
+                }
+            ),
+        ]
 
         response = self.client.delete("/api/vlabs/2")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["id"], 2)
+        self.assertEqual(response.get_json()["status"], "deleting")
+        post.assert_called_once()
+        self.assertEqual(
+            post.call_args.args[0],
+            "https://example-aap.apps.example.com/api/controller/v2/job_templates/12/launch/",
+        )
+        self.assertEqual(
+            post.call_args.kwargs["json"]["extra_vars"],
+            {
+                "vlab_id": 2,
+                "vlab_name": "Cabin systems training",
+                "vlab_type": "Boing 737",
+                "vlab_action": "delete",
+            },
+        )
+
+    @patch("app.requests.get")
+    def test_list_vlabs_removes_successful_deleting_job(self, get):
+        get.return_value.ok = True
+        get.return_value.json.return_value = {"status": "successful"}
+        self.database.execute.side_effect = [
+            self.cursor(
+                rows=[
+                    {
+                        "id": 2,
+                        "name": "Cabin systems training",
+                        "type": "Boing 737",
+                        "status": "deleting",
+                        "aap_job_id": 44,
+                        "aap_target_status": "deleted",
+                        "aap_last_job_status": "launched",
+                    }
+                ]
+            ),
+            self.cursor(),
+        ]
+
+        response = self.client.get("/api/vlabs")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), [])
+        get.assert_called_once()
+
+    @patch("app.requests.post")
+    def test_delete_returns_error_when_aap_launch_fails(self, post):
+        post.return_value.ok = False
+        post.return_value.status_code = 401
+        post.return_value.text = "unauthorized"
+        self.database.execute.side_effect = [
+            self.cursor(
+                row={
+                    "id": 2,
+                    "name": "Cabin systems training",
+                    "type": "Boing 737",
+                    "aap_delete_job_template_id": 12,
+                    "status": "stopped",
+                }
+            ),
+            self.cursor(
+                row={
+                    "id": 2,
+                    "name": "Cabin systems training",
+                    "type": "Boing 737",
+                    "status": "failed",
+                }
+            ),
+        ]
+
+        response = self.client.delete("/api/vlabs/2")
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("AAP job template launch failed", response.get_json()["error"])
+        self.assertEqual(response.get_json()["vlab"]["status"], "failed")
 
     def test_delete_unknown_vlab_returns_not_found(self):
         self.database.execute.return_value = self.cursor(row=None)
