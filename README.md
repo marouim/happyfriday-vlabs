@@ -53,7 +53,9 @@ oc exec -i deployment/postgresql -- \
 
 Le script cree les tables `vlab_types` et `vlabs`, puis insere les types et
 les laboratoires fournis comme donnees initiales. Il peut etre rejoue sans
-dupliquer ces donnees.
+dupliquer ces donnees. Les types de laboratoire portent aussi les numeros des
+job templates AAP Start et Stop; `Airbus A320` est initialise avec Start `8`
+et Stop `9`, et `Boing 737` avec Start `10` et Stop `11`.
 
 Verifier le contenu initialise :
 
@@ -70,6 +72,9 @@ oc exec deployment/postgresql -- \
 Si les valeurs `POSTGRES_USER` ou `POSTGRES_DB` du secret sont modifiees,
 adapter les options `-U` et `-d` dans ces commandes.
 
+Le backend utilise aussi `starting` pendant le demarrage d'un job AAP,
+`stopping` pendant l'arret, et `failed` quand le job AAP echoue.
+
 ## Build binaire local
 
 Depuis la racine du projet :
@@ -78,7 +83,10 @@ Depuis la racine du projet :
 oc login https://api.example.openshift.com:6443
 oc project my-project
 
-oc process -f backend/openshift/binary-template.yaml | oc apply -f -
+oc process -f backend/openshift/binary-template.yaml \
+  -p AAP_BASE_URL=<aap_url> \
+  -p AAP_TOKEN=<token> \
+  | oc apply -f -
 oc start-build virtual-labs-backend --from-dir=backend --follow
 
 BACKEND_URL=https://$(oc get route virtual-labs-backend -o jsonpath='{.spec.host}')
@@ -99,6 +107,8 @@ oc process -f backend/openshift/template.yaml \
   -p SOURCE_REPOSITORY_URL=${REPOSITORY_URL} \
   -p SOURCE_REPOSITORY_REF=main \
   -p CONTEXT_DIR=backend \
+  -p AAP_BASE_URL=<aap_url> \
+  -p AAP_TOKEN=<token> \
   | oc apply -f -
 oc start-build virtual-labs-backend --follow
 

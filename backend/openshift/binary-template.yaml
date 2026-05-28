@@ -11,7 +11,33 @@ parameters:
   - name: PYTHON_IMAGE_TAG
     description: Python S2I ImageStreamTag available in the openshift namespace.
     value: python:3.12-ubi8
+  - name: AAP_BASE_URL
+    description: Base URL for Ansible Automation Platform.
+    value: https://aapurl.com
+  - name: AAP_TOKEN
+    description: AAP bearer token created through the AAP platform gateway tokens endpoint.
+    required: true
 objects:
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: ${APPLICATION_NAME}-aap-config
+      labels:
+        app: ${APPLICATION_NAME}
+    data:
+      AAP_BASE_URL: ${AAP_BASE_URL}
+      AAP_REQUEST_TIMEOUT: "30"
+      AAP_VERIFY_SSL: "true"
+
+  - apiVersion: v1
+    kind: Secret
+    metadata:
+      name: ${APPLICATION_NAME}-aap-secret
+      labels:
+        app: ${APPLICATION_NAME}
+    stringData:
+      AAP_TOKEN: ${AAP_TOKEN}
+
   - apiVersion: image.openshift.io/v1
     kind: ImageStream
     metadata:
@@ -85,6 +111,26 @@ objects:
                     secretKeyRef:
                       name: postgresql-credentials
                       key: POSTGRES_PASSWORD
+                - name: AAP_BASE_URL
+                  valueFrom:
+                    configMapKeyRef:
+                      name: ${APPLICATION_NAME}-aap-config
+                      key: AAP_BASE_URL
+                - name: AAP_REQUEST_TIMEOUT
+                  valueFrom:
+                    configMapKeyRef:
+                      name: ${APPLICATION_NAME}-aap-config
+                      key: AAP_REQUEST_TIMEOUT
+                - name: AAP_VERIFY_SSL
+                  valueFrom:
+                    configMapKeyRef:
+                      name: ${APPLICATION_NAME}-aap-config
+                      key: AAP_VERIFY_SSL
+                - name: AAP_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: ${APPLICATION_NAME}-aap-secret
+                      key: AAP_TOKEN
               readinessProbe:
                 httpGet:
                   path: /api/vlabs

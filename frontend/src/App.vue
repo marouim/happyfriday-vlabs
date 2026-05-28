@@ -1,6 +1,6 @@
 <script setup>
 import { mdiDelete, mdiPlay, mdiStop } from '@mdi/js'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || ''
 const laboratories = ref([])
@@ -25,15 +25,28 @@ const labsLoading = ref(false)
 const typesLoading = ref(false)
 const formSaving = ref(false)
 const alertMessage = ref('')
+let progressPollInterval = null
 
 const activeLabs = computed(() =>
   laboratories.value.filter((laboratory) => laboratory.status === 'running').length,
 )
 
 const statusColors = {
+  failed: 'error',
   running: 'success',
+  starting: 'info',
   stopped: 'warning',
+  stopping: 'info',
   terminated: 'error',
+}
+
+const statusLabels = {
+  failed: 'Failed',
+  running: 'Running',
+  starting: 'Starting',
+  stopped: 'Stopped',
+  stopping: 'Stopping',
+  terminated: 'Terminated',
 }
 
 const required = (value) => Boolean(value?.trim?.() || value) || 'Ce champ est requis.'
@@ -76,11 +89,35 @@ function isDeletionPending(laboratory) {
 }
 
 function isActionPending(laboratory) {
-  return isStatusPending(laboratory) || isDeletionPending(laboratory)
+  return isProgressStatus(laboratory.status) || isStatusPending(laboratory) || isDeletionPending(laboratory)
 }
 
-function wait(duration) {
-  return new Promise((resolve) => window.setTimeout(resolve, duration))
+function isProgressStatus(status) {
+  return status === 'starting' || status === 'stopping'
+}
+
+function stopProgressPolling() {
+  if (progressPollInterval) {
+    window.clearInterval(progressPollInterval)
+    progressPollInterval = null
+  }
+}
+
+function syncProgressPolling() {
+  const hasInProgressLaboratory = laboratories.value.some(
+    (laboratory) => isProgressStatus(laboratory.status),
+  )
+
+  if (!hasInProgressLaboratory) {
+    stopProgressPolling()
+    return
+  }
+
+  if (!progressPollInterval) {
+    progressPollInterval = window.setInterval(() => {
+      loadLaboratories(false)
+    }, 3000)
+  }
 }
 
 async function requestApi(path, options = {}) {
@@ -100,16 +137,21 @@ async function requestApi(path, options = {}) {
   return body
 }
 
-async function loadLaboratories() {
-  labsLoading.value = true
+async function loadLaboratories(showLoading = true) {
+  if (showLoading) {
+    labsLoading.value = true
+  }
   alertMessage.value = ''
 
   try {
     laboratories.value = await requestApi('/api/vlabs')
+    syncProgressPolling()
   } catch (error) {
     alertMessage.value = `Impossible de charger les laboratoires : ${error.message}`
   } finally {
-    labsLoading.value = false
+    if (showLoading) {
+      labsLoading.value = false
+    }
   }
 }
 
@@ -134,14 +176,12 @@ async function updateStatus(laboratory, status) {
   pendingStatuses.value[laboratory.id] = status
 
   try {
-    const [updatedLaboratory] = await Promise.all([
-      requestApi(`/api/vlabs/${laboratory.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({ status }),
-      }),
-      wait(3000),
-    ])
+    const updatedLaboratory = await requestApi(`/api/vlabs/${laboratory.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ status }),
+    })
     Object.assign(laboratory, updatedLaboratory)
+    syncProgressPolling()
   } catch (error) {
     alertMessage.value = `Impossible de changer le statut : ${error.message}`
   } finally {
@@ -205,6 +245,10 @@ async function deleteLaboratory() {
 onMounted(() => {
   loadLaboratories()
   loadLaboratoryTypes()
+})
+
+onUnmounted(() => {
+  stopProgressPolling()
 })
 </script>
 
@@ -289,17 +333,28 @@ onMounted(() => {
             <template #item.status="{ item }">
               <v-chip
                 :color="statusColors[item.status]"
-                :text="item.status"
+                :text="statusLabels[item.status] || item.status"
                 size="small"
                 variant="tonal"
                 class="status-chip"
-              />
+              >
+                <template v-if="isProgressStatus(item.status)" #prepend>
+                  <v-progress-circular indeterminate size="14" width="2" class="mr-2" />
+                </template>
+              </v-chip>
             </template>
 
             <template #item.actions="{ item }">
               <div class="laboratory-actions">
+                <v-progress-circular
+                  v-if="isProgressStatus(item.status)"
+                  color="info"
+                  indeterminate
+                  size="28"
+                  width="3"
+                />
                 <v-btn
-                  v-if="item.status === 'running'"
+                  v-else-if="item.status === 'running'"
                   :icon="mdiStop"
                   color="error"
                   variant="tonal"
@@ -310,7 +365,7 @@ onMounted(() => {
                   @click="updateStatus(item, 'stopped')"
                 />
                 <v-btn
-                  v-else-if="item.status === 'stopped'"
+                  v-else-if="item.status === 'stopped' || item.status === 'failed'"
                   :icon="mdiPlay"
                   color="success"
                   variant="tonal"
@@ -326,7 +381,7 @@ onMounted(() => {
                   variant="text"
                   size="small"
                   :loading="isDeletionPending(item)"
-                  :disabled="item.status !== 'stopped' || isStatusPending(item)"
+                  :disabled="item.status !== 'stopped' || isActionPending(item)"
                   :aria-label="`Delete ${item.name}`"
                   @click="openDeletionDialog(item)"
                 />

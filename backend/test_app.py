@@ -9,7 +9,13 @@ class VlabApiTestCase(unittest.TestCase):
         self.connect_patcher = patch("app.psycopg.connect")
         self.connect = self.connect_patcher.start()
         self.database = self.connect.return_value.__enter__.return_value
-        self.client = create_app({"TESTING": True}).test_client()
+        self.client = create_app(
+            {
+                "TESTING": True,
+                "AAP_BASE_URL": "https://example-aap.apps.example.com",
+                "AAP_TOKEN": "test-token",
+            }
+        ).test_client()
 
     def tearDown(self):
         self.connect_patcher.stop()
@@ -66,15 +72,243 @@ class VlabApiTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.get_json()["status"], "stopped")
 
-    def test_update_vlab_status(self):
-        self.database.execute.return_value = self.cursor(
-            row={"id": 2, "name": "Cabin systems training", "type": "Boing 737", "status": "running"}
-        )
+    @patch("app.requests.post")
+    def test_start_vlab_launches_start_aap_job_template(self, post):
+        post.return_value.ok = True
+        post.return_value.json.return_value = {"job": 42}
+        self.database.execute.side_effect = [
+            self.cursor(
+                row={
+                    "id": 2,
+                    "name": "Cabin systems training",
+                    "type": "Boing 737",
+                    "aap_start_job_template_id": 10,
+                    "aap_stop_job_template_id": 11,
+                    "status": "stopped",
+                }
+            ),
+            self.cursor(
+                row={
+                    "id": 2,
+                    "name": "Cabin systems training",
+                    "type": "Boing 737",
+                    "status": "starting",
+                }
+            ),
+        ]
 
         response = self.client.put("/api/vlabs/2", json={"status": "running"})
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["status"], "running")
+        self.assertEqual(response.get_json()["status"], "starting")
+        post.assert_called_once()
+        self.assertEqual(
+            post.call_args.args[0],
+            "https://example-aap.apps.example.com/api/controller/v2/job_templates/10/launch/",
+        )
+        self.assertEqual(
+            post.call_args.kwargs["headers"]["Authorization"],
+            "Bearer test-token",
+        )
+        self.assertEqual(
+            post.call_args.kwargs["json"]["extra_vars"],
+            {
+                "vlab_id": 2,
+                "vlab_name": "Cabin systems training",
+                "vlab_type": "Boing 737",
+                "vlab_action": "start",
+            },
+        )
+
+    @patch("app.requests.post")
+    def test_stop_vlab_launches_stop_aap_job_template(self, post):
+        post.return_value.ok = True
+        post.return_value.json.return_value = {"job": 43}
+        self.database.execute.side_effect = [
+            self.cursor(
+                row={
+                    "id": 2,
+                    "name": "Cabin systems training",
+                    "type": "Boing 737",
+                    "aap_start_job_template_id": 10,
+                    "aap_stop_job_template_id": 11,
+                    "status": "running",
+                }
+            ),
+            self.cursor(
+                row={
+                    "id": 2,
+                    "name": "Cabin systems training",
+                    "type": "Boing 737",
+                    "status": "stopping",
+                }
+            ),
+        ]
+
+        response = self.client.put("/api/vlabs/2", json={"status": "stopped"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["status"], "stopping")
+        post.assert_called_once()
+        self.assertEqual(
+            post.call_args.args[0],
+            "https://example-aap.apps.example.com/api/controller/v2/job_templates/11/launch/",
+        )
+        self.assertEqual(
+            post.call_args.kwargs["json"]["extra_vars"],
+            {
+                "vlab_id": 2,
+                "vlab_name": "Cabin systems training",
+                "vlab_type": "Boing 737",
+                "vlab_action": "stop",
+            },
+        )
+
+    @patch("app.requests.post")
+    def test_terminate_vlab_does_not_launch_aap_job_template(self, post):
+        self.database.execute.return_value = self.cursor(
+            row={"id": 2, "name": "Cabin systems training", "type": "Boing 737", "status": "terminated"}
+        )
+
+        response = self.client.put("/api/vlabs/2", json={"status": "terminated"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["status"], "terminated")
+        post.assert_not_called()
+
+    @patch("app.requests.post")
+    def test_start_returns_error_when_aap_launch_fails(self, post):
+        post.return_value.ok = False
+        post.return_value.status_code = 401
+        post.return_value.text = "unauthorized"
+        self.database.execute.side_effect = [
+            self.cursor(
+                row={
+                    "id": 2,
+                    "name": "Cabin systems training",
+                    "type": "Boing 737",
+                    "aap_start_job_template_id": 8,
+                    "aap_stop_job_template_id": 9,
+                    "status": "stopped",
+                }
+            ),
+            self.cursor(
+                row={
+                    "id": 2,
+                    "name": "Cabin systems training",
+                    "type": "Boing 737",
+                    "status": "failed",
+                }
+            ),
+        ]
+
+        response = self.client.put("/api/vlabs/2", json={"status": "running"})
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("AAP job template launch failed", response.get_json()["error"])
+        self.assertEqual(response.get_json()["vlab"]["status"], "failed")
+
+    def test_start_rejects_type_without_aap_job_template(self):
+        self.database.execute.side_effect = [
+            self.cursor(
+                row={
+                    "id": 3,
+                    "name": "Navigation sandbox",
+                    "type": "Embraer ERJ",
+                    "aap_start_job_template_id": None,
+                    "aap_stop_job_template_id": None,
+                    "status": "running",
+                }
+            ),
+            self.cursor(
+                row={
+                    "id": 3,
+                    "name": "Navigation sandbox",
+                    "type": "Embraer ERJ",
+                    "status": "failed",
+                }
+            ),
+        ]
+
+        response = self.client.put("/api/vlabs/3", json={"status": "running"})
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("No AAP start job template", response.get_json()["error"])
+        self.assertEqual(response.get_json()["vlab"]["status"], "failed")
+
+    @patch("app.requests.get")
+    def test_list_vlabs_updates_successful_starting_job_to_target_status(self, get):
+        get.return_value.ok = True
+        get.return_value.json.return_value = {"status": "successful"}
+        self.database.execute.side_effect = [
+            self.cursor(
+                rows=[
+                    {
+                        "id": 2,
+                        "name": "Cabin systems training",
+                        "type": "Boing 737",
+                        "status": "starting",
+                        "aap_job_id": 42,
+                        "aap_target_status": "running",
+                        "aap_last_job_status": "launched",
+                    }
+                ]
+            ),
+            self.cursor(
+                row={
+                    "id": 2,
+                    "name": "Cabin systems training",
+                    "type": "Boing 737",
+                    "status": "running",
+                    "aap_job_id": 42,
+                    "aap_target_status": None,
+                    "aap_last_job_status": "successful",
+                }
+            ),
+        ]
+
+        response = self.client.get("/api/vlabs")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()[0]["status"], "running")
+        get.assert_called_once()
+
+    @patch("app.requests.get")
+    def test_list_vlabs_updates_failed_starting_job_to_failed_status(self, get):
+        get.return_value.ok = True
+        get.return_value.json.return_value = {"status": "failed"}
+        self.database.execute.side_effect = [
+            self.cursor(
+                rows=[
+                    {
+                        "id": 2,
+                        "name": "Cabin systems training",
+                        "type": "Boing 737",
+                        "status": "starting",
+                        "aap_job_id": 42,
+                        "aap_target_status": "running",
+                        "aap_last_job_status": "launched",
+                    }
+                ]
+            ),
+            self.cursor(
+                row={
+                    "id": 2,
+                    "name": "Cabin systems training",
+                    "type": "Boing 737",
+                    "status": "failed",
+                    "aap_job_id": 42,
+                    "aap_target_status": None,
+                    "aap_last_job_status": "failed",
+                }
+            ),
+        ]
+
+        response = self.client.get("/api/vlabs")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()[0]["status"], "failed")
+        get.assert_called_once()
 
     def test_delete_vlab(self):
         self.database.execute.return_value = self.cursor(
