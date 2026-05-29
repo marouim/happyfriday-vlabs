@@ -1,4 +1,5 @@
 import os
+import re
 
 import psycopg
 import requests
@@ -30,6 +31,7 @@ def create_app(test_config=None):
         AAP_REQUEST_TIMEOUT=float(os.environ.get("AAP_REQUEST_TIMEOUT", "30")),
         AAP_VERIFY_SSL=os.environ.get("AAP_VERIFY_SSL", "true").lower()
         not in {"0", "false", "no"},
+        APPS_DOMAIN=os.environ.get("APPS_DOMAIN", ""),
     )
     if test_config:
         app.config.update(test_config)
@@ -49,12 +51,19 @@ def create_app(test_config=None):
             row_factory=dict_row,
         )
 
+    def vlab_url(name):
+        if not app.config["APPS_DOMAIN"]:
+            return None
+        vm_name = re.sub(r"[^a-z0-9]", "-", name.lower())
+        return f"https://{vm_name}-web-virtual-labs.apps.{app.config['APPS_DOMAIN']}"
+
     def serialize_vlab(row):
         return {
             "id": row["id"],
             "name": row["name"],
             "type": row["type"],
             "status": row["status"],
+            "url": vlab_url(row["name"]) if row["status"] == "running" else None,
         }
 
     def serialize_physical_lab_location(row):

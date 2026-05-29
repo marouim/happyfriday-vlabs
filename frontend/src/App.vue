@@ -14,6 +14,7 @@ const virtualHeaders = [
   { title: 'Laboratoire', key: 'name' },
   { title: 'Type', key: 'type' },
   { title: 'Statut', key: 'status', align: 'end' },
+  { title: 'URL', key: 'url', align: 'end', sortable: false },
   { title: 'Actions', key: 'actions', align: 'end', sortable: false },
 ]
 
