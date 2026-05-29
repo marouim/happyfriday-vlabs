@@ -10,6 +10,7 @@ const headers = [
   { title: 'Laboratoire', key: 'name' },
   { title: 'Type', key: 'type' },
   { title: 'Statut', key: 'status', align: 'end' },
+  { title: 'URL', key: 'url', align: 'end', sortable: false },
   { title: 'Actions', key: 'actions', align: 'end', sortable: false },
 ]
 
@@ -345,6 +346,15 @@ onUnmounted(() => {
                   <v-progress-circular indeterminate size="14" width="2" class="mr-2" />
                 </template>
               </v-chip>
+            </template>
+
+            <template #item.url="{ item }">
+              <a
+                v-if="item.url"
+                :href="item.url"
+                target="_blank"
+                rel="noopener noreferrer"
+              >Open</a>
             </template>
 
             <template #item.actions="{ item }">
