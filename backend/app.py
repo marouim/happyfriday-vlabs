@@ -66,6 +66,27 @@ def create_app(test_config=None):
             "url": vlab_url(row["name"]) if row["status"] == "running" else None,
         }
 
+    def serialize_physical_lab_location(row):
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "serverCapacity": row["server_capacity"],
+            "availableServers": row["available_servers"],
+            "description": row["description"],
+        }
+
+    def serialize_physical_lab_request(row):
+        return {
+            "id": row["id"],
+            "requesterName": row["requester_name"],
+            "locationId": row["location_id"],
+            "location": row["location"],
+            "serverCount": row["server_count"],
+            "purpose": row["purpose"],
+            "status": row["status"],
+            "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
+        }
+
     def launch_aap_job_template(vlab, action, job_template_id):
         if not app.config["AAP_BASE_URL"]:
             return None, "AAP_BASE_URL is not configured."
@@ -380,6 +401,103 @@ def create_app(test_config=None):
             ).fetchone()
 
         return jsonify(serialize_vlab(vlab))
+
+    @app.get("/api/physical-lab-locations")
+    def list_physical_lab_locations():
+        with connect_database() as connection:
+            locations = connection.execute(
+                """
+                SELECT id, name, server_capacity, available_servers, description
+                FROM physical_lab_locations
+                ORDER BY name
+                """
+            ).fetchall()
+        return jsonify([serialize_physical_lab_location(location) for location in locations])
+
+    @app.get("/api/physical-lab-requests")
+    def list_physical_lab_requests():
+        with connect_database() as connection:
+            lab_requests = connection.execute(
+                """
+                SELECT physical_lab_requests.id,
+                    physical_lab_requests.requester_name,
+                    physical_lab_requests.location_id,
+                    physical_lab_locations.name AS location,
+                    physical_lab_requests.server_count,
+                    physical_lab_requests.purpose,
+                    physical_lab_requests.status,
+                    physical_lab_requests.created_at
+                FROM physical_lab_requests
+                JOIN physical_lab_locations
+                    ON physical_lab_locations.id = physical_lab_requests.location_id
+                ORDER BY physical_lab_requests.created_at DESC, physical_lab_requests.id DESC
+                """
+            ).fetchall()
+        return jsonify(
+            [serialize_physical_lab_request(lab_request) for lab_request in lab_requests]
+        )
+
+    @app.post("/api/physical-lab-requests")
+    def create_physical_lab_request():
+        payload = request.get_json(silent=True) or {}
+        requester_name = payload.get("requesterName", "").strip()
+        purpose = payload.get("purpose", "").strip()
+
+        try:
+            location_id = int(payload.get("locationId"))
+            server_count = int(payload.get("serverCount"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "A location and server count are required."}), 400
+
+        if not requester_name:
+            return jsonify({"error": "A requester name is required."}), 400
+        if server_count < 1:
+            return jsonify({"error": "At least one server must be requested."}), 400
+
+        with connect_database() as connection:
+            location = connection.execute(
+                """
+                SELECT id, available_servers
+                FROM physical_lab_locations
+                WHERE id = %s
+                FOR UPDATE
+                """,
+                (location_id,),
+            ).fetchone()
+            if location is None:
+                return jsonify({"error": "The physical lab location is invalid."}), 400
+            if server_count > location["available_servers"]:
+                return jsonify({"error": "Not enough servers are available at this location."}), 400
+
+            connection.execute(
+                """
+                UPDATE physical_lab_locations
+                SET available_servers = available_servers - %s
+                WHERE id = %s
+                """,
+                (server_count, location_id),
+            )
+            lab_request = connection.execute(
+                """
+                INSERT INTO physical_lab_requests
+                    (requester_name, location_id, server_count, purpose, status)
+                VALUES (%s, %s, %s, %s, 'requested')
+                RETURNING id,
+                    requester_name,
+                    location_id,
+                    (
+                        SELECT name
+                        FROM physical_lab_locations
+                        WHERE physical_lab_locations.id = physical_lab_requests.location_id
+                    ) AS location,
+                    server_count,
+                    purpose,
+                    status,
+                    created_at
+                """,
+                (requester_name, location_id, server_count, purpose),
+            ).fetchone()
+        return jsonify(serialize_physical_lab_request(lab_request)), 201
 
     return app
 

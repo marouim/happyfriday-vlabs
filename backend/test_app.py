@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from app import create_app
@@ -429,6 +430,112 @@ class VlabApiTestCase(unittest.TestCase):
 
         self.assertEqual(create_response.status_code, 400)
         self.assertEqual(update_response.status_code, 400)
+
+    def test_list_physical_lab_locations(self):
+        self.database.execute.return_value = self.cursor(
+            rows=[
+                {
+                    "id": 1,
+                    "name": "Montreal",
+                    "server_capacity": 12,
+                    "available_servers": 8,
+                    "description": "Primary lab floor.",
+                },
+                {
+                    "id": 2,
+                    "name": "Ottawa",
+                    "server_capacity": 8,
+                    "available_servers": 5,
+                    "description": "Secure lab space.",
+                },
+            ]
+        )
+
+        response = self.client.get("/api/physical-lab-locations")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()[0]["name"], "Montreal")
+        self.assertEqual(response.get_json()[0]["availableServers"], 8)
+
+    def test_list_physical_lab_requests(self):
+        created_at = datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc)
+        self.database.execute.return_value = self.cursor(
+            rows=[
+                {
+                    "id": 7,
+                    "requester_name": "Martin",
+                    "location_id": 1,
+                    "location": "Montreal",
+                    "server_count": 3,
+                    "purpose": "Firmware validation",
+                    "status": "requested",
+                    "created_at": created_at,
+                }
+            ]
+        )
+
+        response = self.client.get("/api/physical-lab-requests")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()[0]["requesterName"], "Martin")
+        self.assertEqual(response.get_json()[0]["serverCount"], 3)
+        self.assertEqual(response.get_json()[0]["createdAt"], created_at.isoformat())
+
+    def test_create_physical_lab_request_reserves_servers(self):
+        created_at = datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc)
+        self.database.execute.side_effect = [
+            self.cursor(row={"id": 1, "available_servers": 8}),
+            self.cursor(),
+            self.cursor(
+                row={
+                    "id": 9,
+                    "requester_name": "Martin",
+                    "location_id": 1,
+                    "location": "Montreal",
+                    "server_count": 2,
+                    "purpose": "Hardware test",
+                    "status": "requested",
+                    "created_at": created_at,
+                }
+            ),
+        ]
+
+        response = self.client.post(
+            "/api/physical-lab-requests",
+            json={
+                "requesterName": "Martin",
+                "locationId": 1,
+                "serverCount": 2,
+                "purpose": "Hardware test",
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.get_json()["status"], "requested")
+        self.database.execute.assert_any_call(
+            """
+                UPDATE physical_lab_locations
+                SET available_servers = available_servers - %s
+                WHERE id = %s
+                """,
+            (2, 1),
+        )
+
+    def test_create_physical_lab_request_rejects_unavailable_servers(self):
+        self.database.execute.return_value = self.cursor(row={"id": 1, "available_servers": 1})
+
+        response = self.client.post(
+            "/api/physical-lab-requests",
+            json={
+                "requesterName": "Martin",
+                "locationId": 1,
+                "serverCount": 2,
+                "purpose": "Hardware test",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Not enough servers", response.get_json()["error"])
 
 
 if __name__ == "__main__":
